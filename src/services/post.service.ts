@@ -12,12 +12,6 @@ export class PostService {
   }
 
   async createPost(post: PostCreationAttributes): Promise<Post> {
-    try {
-      await axios.get(`${this.userServiceUrl}/users/${post.userId}`);
-    } catch (error) {
-      throw new Error('User not found');
-    }
-
     return this.postRepository.createPost(post);
   }
 

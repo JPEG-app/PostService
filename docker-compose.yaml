@@ -1,0 +1,32 @@
+services:
+  post-service:
+    build: .
+    ports:
+      - "3002:3002"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:password@db:5433/posts
+    depends_on:
+      - db
+
+  db:
+    image: postgres:latest
+    ports:
+      - "5433:5432" 
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: posts
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: always
+
+volumes:
+  db_data:
+
+networks:
+  jpeg:
+    external: true

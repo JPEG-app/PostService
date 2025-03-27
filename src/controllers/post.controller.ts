@@ -16,6 +16,7 @@ export class PostController {
       if (error.message === 'User not found') {
         res.status(400).json({ message: error.message });
       } else {
+        console.log(error);
         res.status(500).json({ message: 'Internal server error' });
       }
     }
@@ -30,6 +31,7 @@ export class PostController {
         res.status(404).json({ message: 'Post not found' });
       }
     } catch (error) {
+      console.log(error);
       res.status(500).json({ message: 'Internal server error' });
     }
   }
@@ -43,6 +45,7 @@ export class PostController {
         res.status(404).json({ message: 'Post not found' });
       }
     } catch (error) {
+      console.log(error);
       res.status(500).json({ message: 'Internal server error' });
     }
   }
@@ -56,6 +59,7 @@ export class PostController {
         res.status(404).json({ message: 'Post not found' });
       }
     } catch (error) {
+      console.log(error);
       res.status(500).json({ message: 'Internal server error' });
     }
   }
@@ -65,6 +69,7 @@ export class PostController {
       const posts = await this.postService.findPostsByUserId(req.params.userId);
       res.json(posts);
     } catch (error) {
+      console.log(error);
       res.status(500).json({ message: 'Internal server error' });
     }
   }
@@ -74,6 +79,7 @@ export class PostController {
       const posts = await this.postService.findAllPosts();
       res.json(posts);
     } catch (error) {
+      console.log(error);
       res.status(500).json({ message: 'Internal server error' });
     }
   }
