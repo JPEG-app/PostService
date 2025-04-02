@@ -12,16 +12,17 @@ services:
       - db
 
   db:
-    image: postgres:latest
+    build: ./db
     ports:
-      - "5433:5432" 
+      - "5433:5432"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: posts
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
     volumes:
       - db_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - jpeg
     restart: always
 
 volumes:
