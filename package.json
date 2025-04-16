@@ -1,7 +1,7 @@
 {
-    "name": "user-management-api",
+    "name": "post-management-api",
     "version": "1.0.0",
-    "description": "User management API microservice",
+    "description": "Post management API microservice",
     "main": "dist/index.js",
     "scripts": {
         "build": "tsc",
