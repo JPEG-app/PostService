@@ -1,0 +1,172 @@
+# minikube-post-deployment-matched.yaml
+# Structure matches the user-service.yaml provided earlier.
+# WARNING: Contains secrets inline and duplicates DB credentials in ConfigMap. Less secure.
+
+# --- Secret for Database Credentials ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: post-db-secret # Unique name for this service's DB
+type: Opaque
+stringData:
+  POSTGRES_USER: "postgres"   # From .env
+  POSTGRES_PASSWORD: "password" # From .env
+---
+# --- Secret for Post Service ---
+# Mirrored user-service structure; add real secrets if needed, otherwise remove keys or definition.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: post-service-secret # Unique name
+type: Opaque
+stringData:
+  JWT_SECRET: "replace-with-post-service-jwt-secret-if-any" # Placeholder like user-service's
+---
+# --- ConfigMap for Database Initialization ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: post-db-init-config # Unique name
+data:
+  init.sql: |
+    # ### REPLACE ### with your actual init.sql content from ./db/init.sql
+    CREATE TABLE IF NOT EXISTS posts (
+      post_id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+---
+# --- ConfigMap for Database Configuration ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: post-db-config # Unique name
+data:
+  POSTGRES_DB: "posts" # From .env (DB_NAME)
+---
+# --- ConfigMap for Post Service Configuration ---
+# Duplicates DB credentials like user-service-config does
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: post-service-config # Unique name
+data:
+  NODE_ENV: "production"
+  PORT: "3002" # From .env
+  DB_HOST: "post-db-service" # Use the K8s Service name for the DB
+  DB_NAME: "posts" # From .env
+  DB_USER: "postgres" # <-- DUPLICATED from .env / post-db-secret
+  DB_PASSWORD: "password" # <-- DUPLICATED from .env / post-db-secret
+  USER_SERVICE_URL: "http://user-service-service:3001" # Adjusted K8s URL
+---
+# --- Persistent Volume Claim for Database ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: post-db-pvc # Unique name
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi # Adjust size as needed
+---
+# --- Database Deployment ---
+# This remains the same, using post-db-secret for its own env vars
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: post-db-deployment # Unique name
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-post-db # Unique label
+  template:
+    metadata:
+      labels:
+        app: postgres-post-db # Unique label
+    spec:
+      containers:
+      - name: postgres # Container name can stay postgres
+        image: postgres:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5432
+        envFrom:
+        - secretRef:
+            name: post-db-secret # DB uses its own secret
+        - configMapRef:
+            name: post-db-config
+        volumeMounts:
+        - name: post-db-storage
+          mountPath: /var/lib/postgresql/data
+        - name: post-db-init-scripts
+          mountPath: /docker-entrypoint-initdb.d
+      volumes:
+      - name: post-db-storage
+        persistentVolumeClaim:
+          claimName: post-db-pvc
+      - name: post-db-init-scripts
+        configMap:
+          name: post-db-init-config
+---
+# --- Database Service (Internal Cluster Access) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: post-db-service # Unique name, used as DB_HOST
+spec:
+  selector:
+    app: postgres-post-db # Match the DB pod label
+  ports:
+  - protocol: TCP
+    port: 5432 # Standard port
+    targetPort: 5432
+  type: ClusterIP
+---
+# --- Post Service Deployment ---
+# Modified envFrom to match user-service structure
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: post-service-deployment # Unique name
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: post-service # Unique label
+  template:
+    metadata:
+      labels:
+        app: post-service # Unique label
+    spec:
+      containers:
+      - name: post-service # Container name
+        image: post-service:latest # Image built earlier
+        imagePullPolicy: Never # Keep Never for local Minikube build
+        ports:
+        - containerPort: 3002
+        envFrom: # Reads from its own ConfigMap and Secret ONLY
+        - configMapRef:
+            name: post-service-config # App gets DB creds from here now
+        - secretRef:
+            name: post-service-secret # Include app specific secret if needed
+        # REMOVED direct injection from post-db-secret
+---
+# --- Post Service Service (External Access via NodePort) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: post-service-service # Unique name
+spec:
+  selector:
+    app: post-service # Match the post-service pod label
+  ports:
+  - protocol: TCP
+    port: 3002
+    targetPort: 3002
+  type: NodePort

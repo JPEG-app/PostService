@@ -2,12 +2,16 @@ import express from 'express';
 import { PostController } from '../controllers/post.controller';
 import { PostService } from '../services/post.service';
 import { PostRepository } from '../repositories/post.repository';
+import { CachedUserRepository } from '../repositories/cachedUser.repository'; // Import new repo
 
 const router = express.Router();
 
-export const setupPostRoutes = (userServiceUrl: string) => {
+// userServiceUrl might not be needed anymore if its only purpose was user validation
+// export const setupPostRoutes = (userServiceUrl: string) => {
+export const setupPostRoutes = () => {
   const postRepository = new PostRepository();
-  const postService = new PostService(postRepository, userServiceUrl);
+  const cachedUserRepository = new CachedUserRepository(); // Instantiate new repo
+  const postService = new PostService(postRepository, cachedUserRepository /*, userServiceUrl */); // Pass it to service
   const postController = new PostController(postService);
 
   router.post('/posts', postController.createPost.bind(postController));

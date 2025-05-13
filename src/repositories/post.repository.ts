@@ -15,12 +15,29 @@ const pool = new Pool({
 export class PostRepository {
   async createPost(post: PostCreationAttributes): Promise<Post> {
     try {
-      const query = 'INSERT INTO posts (user_id, title, content) VALUES ($1, $2, $3) RETURNING *';
+      // Assuming your PK column is 'post_id' and other columns match camelCase or are handled by pg
+      const query = `
+        INSERT INTO posts (user_id, title, content) 
+        VALUES ($1, $2, $3) 
+        RETURNING 
+          post_id AS "postId", 
+          user_id AS "userId", 
+          title, 
+          content, 
+          created_at AS "createdAt", 
+          updated_at AS "updatedAt"
+      `;
+      // If your other columns are also snake_case, alias them too:
+      // user_id AS "userId", created_at AS "createdAt", updated_at AS "updatedAt"
       const values = [post.userId, post.title, post.content];
       const result = await pool.query(query, values);
-      return result.rows[0];
+      console.log("PostRepository createPost result.rows[0]:", result.rows[0]); // Add this for debugging
+      if (!result.rows[0] || !result.rows[0].postId) {
+          console.error("PostRepository: createPost did not return a valid post with postId.", result.rows[0]);
+      }
+      return result.rows[0] as Post; // Cast to Post if you're sure the shape matches
     } catch (error: any) {
-      console.error('Error creating post:', error);
+      console.error('Error creating post in repository:', error);
       throw new Error('Database error: ' + error.message);
     }
   }

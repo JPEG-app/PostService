@@ -1,18 +1,67 @@
 import { Post, PostCreationAttributes, PostUpdateAttributes } from '../models/post.model';
 import { PostRepository } from '../repositories/post.repository';
-import axios from 'axios';
+import { CachedUserRepository } from '../repositories/cachedUser.repository';
+// The line below was incorrect and referred to user-service. We need post-service's own producer.
+// import { getKafkaProducer as getUserServiceKafkaProducer } from '../../user-service/src/kafka/producer';
+import { getKafkaProducer } from '../kafka/producer'; // Correct: Use producer from post-service/src/kafka/producer.ts
+import { ProducerRecord } from 'kafkajs';
+
+const POST_EVENTS_TOPIC = process.env.POST_EVENTS_TOPIC || 'post_events';
+
+export interface PostCreatedEventData extends Post {
+  eventType: 'PostCreated';
+  eventTimestamp: string;
+}
 
 export class PostService {
   private postRepository: PostRepository;
-  private userServiceUrl: string;
+  private cachedUserRepository: CachedUserRepository;
 
-  constructor(postRepository: PostRepository, userServiceUrl: string) {
+  constructor(
+    postRepository: PostRepository,
+    cachedUserRepository: CachedUserRepository
+  ) {
     this.postRepository = postRepository;
-    this.userServiceUrl = userServiceUrl;
+    this.cachedUserRepository = cachedUserRepository;
   }
 
-  async createPost(post: PostCreationAttributes): Promise<Post> {
-    return this.postRepository.createPost(post);
+  private async sendPostEvent(eventData: PostCreatedEventData): Promise<void> {
+    try {
+      // This 'getKafkaProducer' should be the one defined in post-service/src/kafka/producer.ts
+      const producer = await getKafkaProducer();
+      const record: ProducerRecord = {
+        topic: POST_EVENTS_TOPIC,
+        messages: [{ value: JSON.stringify(eventData) }],
+      };
+      await producer.send(record);
+      console.log(`Sent ${eventData.eventType} event for postId ${eventData.postId} to Kafka topic ${POST_EVENTS_TOPIC}`);
+    } catch (error) {
+      console.error(`Failed to send post event to Kafka for postId ${eventData.postId}:`, error);
+    }
+  }
+
+  async createPost(postData: PostCreationAttributes): Promise<Post> {
+    const userExists = await this.cachedUserRepository.findCachedUserById(postData.userId);
+
+    if (!userExists) {
+      console.error(`User validation failed: User with ID ${postData.userId} not found in local cache.`);
+      throw new Error('User not found');
+    }
+
+    const createdPost = await this.postRepository.createPost(postData);
+
+    if (createdPost && createdPost.postId) {
+      const eventPayload: PostCreatedEventData = {
+        ...createdPost,
+        eventType: 'PostCreated',
+        eventTimestamp: new Date().toISOString(),
+      };
+      await this.sendPostEvent(eventPayload);
+    } else {
+        console.error("Post created but ID is missing, cannot send PostCreated Kafka event.");
+    }
+
+    return createdPost;
   }
 
   async findPostById(postId: string): Promise<Post | undefined> {
@@ -20,11 +69,13 @@ export class PostService {
   }
 
   async updatePost(postId: string, updatedPost: PostUpdateAttributes): Promise<Post | undefined> {
-    return this.postRepository.updatePost(postId, updatedPost);
+    const post = await this.postRepository.updatePost(postId, updatedPost);
+    return post;
   }
 
   async deletePost(postId: string): Promise<boolean> {
-    return this.postRepository.deletePost(postId);
+    const success = await this.postRepository.deletePost(postId);
+    return success;
   }
 
   async findPostsByUserId(userId: string): Promise<Post[]> {
