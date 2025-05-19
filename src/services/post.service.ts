@@ -27,7 +27,6 @@ export class PostService {
 
   private async sendPostEvent(eventData: PostCreatedEventData): Promise<void> {
     try {
-      // This 'getKafkaProducer' should be the one defined in post-service/src/kafka/producer.ts
       const producer = await getKafkaProducer();
       const record: ProducerRecord = {
         topic: POST_EVENTS_TOPIC,

@@ -10,6 +10,10 @@ export class PostController {
 
   async createPost(req: Request, res: Response) {
     try {
+      const { userId, title, content } = req.body;
+      if (!userId || !title || !content) {
+        return res.status(400).json({ message: 'Missing required fields: userId, title, content' });
+      }
       const post = await this.postService.createPost(req.body);
       res.status(201).json(post);
     } catch (error: any) {

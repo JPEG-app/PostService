@@ -9,9 +9,12 @@ const clientId = process.env.KAFKA_CLIENT_ID_POST_PRODUCER || 'post-service-prod
 const kafka = new Kafka({
   clientId: clientId,
   brokers: [kafkaBroker],
-  retry: { // Robust retry configuration
-    initialRetryTime: 300,
-    retries: 5
+  retry: {
+    initialRetryTime: 3000,    // Start with a 3-second wait (increased from default 300ms)
+    retries: 30,               // Try up to 30 times (increased from default 5 or 10)
+    maxRetryTime: 30000,       // Max time to wait before a single retry (30 seconds)
+    factor: 2,                 // Exponential backoff factor
+    multiplier: 2,             // Jitter to spread out retries over time
   }
 });
 
