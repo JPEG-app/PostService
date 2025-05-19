@@ -1,6 +1,8 @@
 import { Kafka, Consumer, EachMessagePayload } from 'kafkajs';
 import * as dotenv from 'dotenv';
-import { CachedUserRepository } from '../repositories/cachedUser.repository';
+import { CachedUserRepository, initializeCachedUserRepositoryLogger as initCachedUserRepoLoggerFromConsumer } from '../repositories/cachedUser.repository';
+import winston from 'winston';
+import { v4 as uuidv4 } from 'uuid';
 
 dotenv.config();
 
@@ -13,97 +15,117 @@ const kafka = new Kafka({
   clientId: clientId,
   brokers: [kafkaBroker],
   retry: {
-    initialRetryTime: 3000,    // Start with a 3-second wait (increased from default 300ms)
-    retries: 30,               // Try up to 30 times (increased from default 5 or 10)
-    maxRetryTime: 30000,       // Max time to wait before a single retry (30 seconds)
-    factor: 2,                 // Exponential backoff factor
-    multiplier: 2,             // Jitter to spread out retries over time
+    initialRetryTime: 3000,
+    retries: 30,
+    maxRetryTime: 30000,
+    factor: 2,
+    multiplier: 2,
   }
 });
 
 let consumer: Consumer | null = null;
-let cachedUserRepository: CachedUserRepository | null = null;
+let cachedUserRepositoryInstance: CachedUserRepository | null = null;
+let consumerLogger: winston.Logger | Console = console; 
 
 interface UserLifecycleEvent {
   eventType: 'UserCreated' | 'UserDeleted' | 'UserUpdated';
   userId: string;
+  username?: string; 
   timestamp: string;
 }
 
-const initializeCachedUserRepository = (): CachedUserRepository => {
-  if (!cachedUserRepository) {
-    cachedUserRepository = new CachedUserRepository();
+export const initializeConsumerDependencies = (loggerInstance: winston.Logger): CachedUserRepository => {
+  consumerLogger = loggerInstance;
+  initCachedUserRepoLoggerFromConsumer(loggerInstance); 
+  if (!cachedUserRepositoryInstance) {
+    cachedUserRepositoryInstance = new CachedUserRepository(loggerInstance);
   }
-  return cachedUserRepository;
+  return cachedUserRepositoryInstance;
 };
 
+
 const handleUserLifecycleEvent = async ({ topic, partition, message }: EachMessagePayload): Promise<void> => {
+  const msgCorrelationId = message.headers?.['X-Correlation-ID']?.toString() ||
+                           message.headers?.['correlationId']?.toString() ||
+                           uuidv4();
+
+  const logMetadata = {
+      topic,
+      partition,
+      offset: message.offset,
+      correlationId: msgCorrelationId,
+      messageKey: message.key?.toString(),
+      type: 'KafkaConsumerLog.UserLifecycleEventReceived'
+  };
+
   if (!message.value) {
-    console.warn('Received Kafka message with no value.');
+    consumerLogger.warn(`Kafka Consumer: Received message with no value.`, logMetadata );
     return;
   }
 
-  const repo = initializeCachedUserRepository();
+  if (!cachedUserRepositoryInstance) {
+      consumerLogger.error('Kafka Consumer: CachedUserRepository not initialized. Skipping message.', logMetadata);
+      return; 
+  }
+
+  const repo = cachedUserRepositoryInstance;
   const eventDataString = message.value.toString();
-  console.log(`Received message from topic ${topic}: ${eventDataString}`);
+  consumerLogger.info(`Kafka Consumer: Received message, processing...`, { ...logMetadata, dataPreview: eventDataString.substring(0,100) + '...' });
 
   try {
     const event: UserLifecycleEvent = JSON.parse(eventDataString);
 
     if (!event.userId || !event.eventType) {
-        console.warn('Received malformed user lifecycle event:', event);
+        consumerLogger.warn('Kafka Consumer: Received malformed user lifecycle event.', { ...logMetadata, eventData: eventDataString, type: 'KafkaConsumerLog.MalformedEvent' });
         return;
     }
 
     switch (event.eventType) {
       case 'UserCreated':
-        await repo.addCachedUser(event.userId);
-        console.log(`Cached user ${event.userId} due to UserCreated event.`);
+        await repo.addCachedUser(event.userId, msgCorrelationId);
+        consumerLogger.info(`Kafka Consumer: Cached user due to UserCreated event.`, { ...logMetadata, userId: event.userId, eventType: event.eventType, type: 'KafkaConsumerLog.UserCreatedProcessed' });
         break;
       case 'UserDeleted':
-        await repo.removeCachedUser(event.userId);
-        console.log(`Removed cached user ${event.userId} due to UserDeleted event.`);
+        await repo.removeCachedUser(event.userId, msgCorrelationId);
+        consumerLogger.info(`Kafka Consumer: Removed cached user due to UserDeleted event.`, { ...logMetadata, userId: event.userId, eventType: event.eventType, type: 'KafkaConsumerLog.UserDeletedProcessed' });
         break;
       case 'UserUpdated':
-        // For now, UserUpdated might just refresh the updated_at timestamp
-        // or ensure the user exists if they were somehow missed.
-        await repo.addCachedUser(event.userId);
-        console.log(`Refreshed cached user ${event.userId} due to UserUpdated event.`);
+        await repo.addCachedUser(event.userId, msgCorrelationId);
+        consumerLogger.info(`Kafka Consumer: Refreshed cached user due to UserUpdated event.`, { ...logMetadata, userId: event.userId, eventType: event.eventType, type: 'KafkaConsumerLog.UserUpdatedProcessed' });
         break;
       default:
-        console.warn(`Unknown event type received: ${event.eventType}`);
+        consumerLogger.warn(`Kafka Consumer: Unknown event type received.`, { ...logMetadata, eventTypeReceived: (event as any).eventType, type: 'KafkaConsumerLog.UnknownEventType' });
     }
-  } catch (error) {
-    console.error('Error processing user lifecycle event:', error);
-    console.error('Failed event data:', eventDataString);
-    // Implement more robust error handling (e.g., dead-letter queue)
+  } catch (error: any) {
+    consumerLogger.error('Kafka Consumer: Error processing user lifecycle event.', { ...logMetadata, error: error.message, stack: error.stack, eventData: eventDataString, type: 'KafkaConsumerLog.ProcessingError' });
   }
 };
 
-export const startUserEventsConsumer = async (): Promise<void> => {
+export const startUserEventsConsumer = async (loggerInstance: winston.Logger): Promise<void> => {
+  initializeConsumerDependencies(loggerInstance); 
+
   if (consumer) {
-    console.log('User events consumer already running.');
+    consumerLogger.info('Kafka Consumer: User events consumer already running.', { clientId, type: 'KafkaConsumerControl.AlreadyRunning'});
     return;
   }
 
-  initializeCachedUserRepository();
   consumer = kafka.consumer({ groupId: consumerGroupId });
 
   try {
     await consumer.connect();
-    console.log(`Kafka Consumer [${clientId}] connected to ${kafkaBroker} for group ${consumerGroupId}`);
-    await consumer.subscribe({ topic: userLifecycleTopic, fromBeginning: true });
-    console.log(`Subscribed to topic: ${userLifecycleTopic}`);
+    consumerLogger.info(`Kafka Consumer [${clientId}] connected to ${kafkaBroker} for group ${consumerGroupId}`, { clientId, kafkaBroker, consumerGroupId, type: 'KafkaConsumerControl.Connected' });
+    await consumer.subscribe({ topic: userLifecycleTopic, fromBeginning: true }); 
+    consumerLogger.info(`Kafka Consumer: Subscribed to topic: ${userLifecycleTopic}`, { topic: userLifecycleTopic, type: 'KafkaConsumerControl.Subscribed' });
 
     await consumer.run({
       eachMessage: handleUserLifecycleEvent,
     });
-    console.log('User events consumer is running...');
-  } catch (error) {
-    console.error(`Failed to start Kafka Consumer [${clientId}]:`, error);
+    consumerLogger.info('Kafka Consumer: User events consumer is running...', { type: 'KafkaConsumerControl.Running' });
+  } catch (error: any) {
+    consumerLogger.error(`Kafka Consumer: Failed to start [${clientId}]`, { clientId, error: error.message, stack: error.stack, type: 'KafkaConsumerControl.StartError' });
     if (consumer) {
       await consumer.disconnect().catch(disconnectError => {
-        console.error('Error disconnecting consumer after startup failure:', disconnectError);
+        consumerLogger.error('Kafka Consumer: Error disconnecting consumer after startup failure.', { error: (disconnectError as Error).message, type: 'KafkaConsumerControl.DisconnectErrorOnFail' });
       });
       consumer = null;
     }
@@ -113,15 +135,16 @@ export const startUserEventsConsumer = async (): Promise<void> => {
 
 export const stopUserEventsConsumer = async (): Promise<void> => {
   if (consumer) {
+    consumerLogger.info(`Kafka Consumer [${clientId}]: Disconnecting...`, { clientId, type: 'KafkaConsumerControl.Disconnecting' });
     try {
       await consumer.disconnect();
-      console.log(`Kafka Consumer [${clientId}] disconnected.`);
-    } catch (error) {
-      console.error(`Error disconnecting Kafka Consumer [${clientId}]:`, error);
+      consumerLogger.info(`Kafka Consumer [${clientId}] disconnected successfully.`, { clientId, type: 'KafkaConsumerControl.Disconnected' });
+    } catch (error: any) {
+      consumerLogger.error(`Kafka Consumer: Error disconnecting [${clientId}]`, { clientId, error: error.message, stack: error.stack, type: 'KafkaConsumerControl.DisconnectError' });
     } finally {
       consumer = null;
     }
   } else {
-    console.log('User events consumer was not running.');
+    consumerLogger.info('Kafka Consumer: User events consumer was not running or already stopped.', { type: 'KafkaConsumerControl.NotRunning' });
   }
 };

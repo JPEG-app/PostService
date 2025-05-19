@@ -1,90 +1,127 @@
-import { Request, Response } from 'express';
+import { Request as ExpressRequest, Response } from 'express';
 import { PostService } from '../services/post.service';
+import { RequestWithId } from '../utils/logger';
+import winston from 'winston';
 
 export class PostController {
   private postService: PostService;
+  private logger: winston.Logger;
 
-  constructor(postService: PostService) {
+  constructor(postService: PostService, loggerInstance: winston.Logger) {
     this.postService = postService;
+    this.logger = loggerInstance;
   }
 
-  async createPost(req: Request, res: Response) {
+  async createPost(req: ExpressRequest, res: Response) {
+    const typedReq = req as RequestWithId;
+    const correlationId = typedReq.id;
+    this.logger.info('PostController: createPost initiated', { correlationId, body: req.body, type: 'ControllerLog.createPost' });
     try {
       const { userId, title, content } = req.body;
       if (!userId || !title || !content) {
-        return res.status(400).json({ message: 'Missing required fields: userId, title, content' });
+        this.logger.warn('PostController: createPost - Missing required fields', { correlationId, required: ['userId', 'title', 'content'], provided: req.body, type: 'ControllerValidationWarn.createPost' });
+        return res.status(400).json({ message: 'Missing required fields: userId, title, content', correlationId });
       }
-      const post = await this.postService.createPost(req.body);
+      const post = await this.postService.createPost(req.body, correlationId);
+      this.logger.info('PostController: createPost successful', { correlationId, postId: post.postId, type: 'ControllerLog.createPost' });
       res.status(201).json(post);
     } catch (error: any) {
       if (error.message === 'User not found') {
-        res.status(400).json({ message: error.message });
+        this.logger.warn(`PostController: createPost failed - User not found`, { correlationId, userId: req.body.userId, error: error.message, type: 'ControllerUserError.createPost' });
+        res.status(400).json({ message: error.message, correlationId });
       } else {
-        console.log(error);
-        res.status(500).json({ message: 'Internal server error' });
+        this.logger.error('PostController: createPost - Internal server error', { correlationId, error: error.message, stack: error.stack, type: 'ControllerError.createPost' });
+        res.status(500).json({ message: 'Internal server error', correlationId });
       }
     }
   }
 
-  async getPostById(req: Request, res: Response) {
+  async getPostById(req: ExpressRequest, res: Response) {
+    const typedReq = req as RequestWithId;
+    const correlationId = typedReq.id;
+    const postId = req.params.postId;
+    this.logger.info('PostController: getPostById initiated', { correlationId, postId, type: 'ControllerLog.getPostById' });
     try {
-      const post = await this.postService.findPostById(req.params.postId);
+      const post = await this.postService.findPostById(postId, correlationId);
       if (post) {
+        this.logger.info('PostController: getPostById successful', { correlationId, postId, type: 'ControllerLog.getPostById' });
         res.json(post);
       } else {
-        res.status(404).json({ message: 'Post not found' });
+        this.logger.warn('PostController: getPostById - Post not found', { correlationId, postId, type: 'ControllerNotFound.getPostById' });
+        res.status(404).json({ message: 'Post not found', correlationId });
       }
-    } catch (error) {
-      console.log(error);
-      res.status(500).json({ message: 'Internal server error' });
+    } catch (error: any) {
+      this.logger.error('PostController: getPostById - Internal server error', { correlationId, postId, error: error.message, stack: error.stack, type: 'ControllerError.getPostById' });
+      res.status(500).json({ message: 'Internal server error', correlationId });
     }
   }
 
-  async updatePost(req: Request, res: Response) {
+  async updatePost(req: ExpressRequest, res: Response) {
+    const typedReq = req as RequestWithId;
+    const correlationId = typedReq.id;
+    const postId = req.params.postId;
+    this.logger.info('PostController: updatePost initiated', { correlationId, postId, body: req.body, type: 'ControllerLog.updatePost' });
     try {
-      const updatedPost = await this.postService.updatePost(req.params.postId, req.body);
+      const updatedPost = await this.postService.updatePost(postId, req.body, correlationId);
       if (updatedPost) {
+        this.logger.info('PostController: updatePost successful', { correlationId, postId, type: 'ControllerLog.updatePost' });
         res.json(updatedPost);
       } else {
-        res.status(404).json({ message: 'Post not found' });
+        this.logger.warn('PostController: updatePost - Post not found', { correlationId, postId, type: 'ControllerNotFound.updatePost' });
+        res.status(404).json({ message: 'Post not found', correlationId });
       }
-    } catch (error) {
-      console.log(error);
-      res.status(500).json({ message: 'Internal server error' });
+    } catch (error: any) {
+      this.logger.error('PostController: updatePost - Internal server error', { correlationId, postId, error: error.message, stack: error.stack, type: 'ControllerError.updatePost' });
+      res.status(500).json({ message: 'Internal server error', correlationId });
     }
   }
 
-  async deletePost(req: Request, res: Response) {
+  async deletePost(req: ExpressRequest, res: Response) {
+    const typedReq = req as RequestWithId;
+    const correlationId = typedReq.id;
+    const postId = req.params.postId;
+    this.logger.info('PostController: deletePost initiated', { correlationId, postId, type: 'ControllerLog.deletePost' });
     try {
-      const deleted = await this.postService.deletePost(req.params.postId);
+      const deleted = await this.postService.deletePost(postId, correlationId);
       if (deleted) {
+        this.logger.info('PostController: deletePost successful', { correlationId, postId, type: 'ControllerLog.deletePost' });
         res.status(204).send();
       } else {
-        res.status(404).json({ message: 'Post not found' });
+        this.logger.warn('PostController: deletePost - Post not found', { correlationId, postId, type: 'ControllerNotFound.deletePost' });
+        res.status(404).json({ message: 'Post not found', correlationId });
       }
-    } catch (error) {
-      console.log(error);
-      res.status(500).json({ message: 'Internal server error' });
+    } catch (error: any) {
+      this.logger.error('PostController: deletePost - Internal server error', { correlationId, postId, error: error.message, stack: error.stack, type: 'ControllerError.deletePost' });
+      res.status(500).json({ message: 'Internal server error', correlationId });
     }
   }
 
-  async getPostsByUserId(req: Request, res: Response) {
+  async getPostsByUserId(req: ExpressRequest, res: Response) {
+    const typedReq = req as RequestWithId;
+    const correlationId = typedReq.id;
+    const userId = req.params.userId;
+    this.logger.info('PostController: getPostsByUserId initiated', { correlationId, userId, type: 'ControllerLog.getPostsByUserId' });
     try {
-      const posts = await this.postService.findPostsByUserId(req.params.userId);
+      const posts = await this.postService.findPostsByUserId(userId, correlationId);
+      this.logger.info(`PostController: getPostsByUserId successful, found ${posts.length} posts`, { correlationId, userId, count: posts.length, type: 'ControllerLog.getPostsByUserId' });
       res.json(posts);
-    } catch (error) {
-      console.log(error);
-      res.status(500).json({ message: 'Internal server error' });
+    } catch (error: any) {
+      this.logger.error('PostController: getPostsByUserId - Internal server error', { correlationId, userId, error: error.message, stack: error.stack, type: 'ControllerError.getPostsByUserId' });
+      res.status(500).json({ message: 'Internal server error', correlationId });
     }
   }
 
-  async getAllPosts(req: Request, res: Response) {
+  async getAllPosts(req: ExpressRequest, res: Response) {
+    const typedReq = req as RequestWithId;
+    const correlationId = typedReq.id;
+    this.logger.info('PostController: getAllPosts initiated', { correlationId, type: 'ControllerLog.getAllPosts' });
     try {
-      const posts = await this.postService.findAllPosts();
+      const posts = await this.postService.findAllPosts(correlationId);
+      this.logger.info(`PostController: getAllPosts successful, found ${posts.length} posts`, { correlationId, count: posts.length, type: 'ControllerLog.getAllPosts' });
       res.json(posts);
-    } catch (error) {
-      console.log(error);
-      res.status(500).json({ message: 'Internal server error' });
+    } catch (error: any) {
+      this.logger.error('PostController: getAllPosts - Internal server error', { correlationId, error: error.message, stack: error.stack, type: 'ControllerError.getAllPosts' });
+      res.status(500).json({ message: 'Internal server error', correlationId });
     }
   }
 }
