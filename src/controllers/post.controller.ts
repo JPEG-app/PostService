@@ -15,6 +15,17 @@ export class PostController {
   async createPost(req: ExpressRequest, res: Response) {
     const typedReq = req as RequestWithId;
     const correlationId = typedReq.id;
+    const authUserId = typedReq.authUserId; 
+
+    if (!authUserId) {
+        this.logger.warn('PostController: createPost - Unauthorized, no authenticated user', { correlationId, type: 'ControllerAuthError.createPostNoAuthUser' });
+        return res.status(401).json({ message: 'Unauthorized: Missing authentication', correlationId });
+    }
+    if (String(req.body.userId) !== String(authUserId)) {
+        this.logger.warn('PostController: createPost - Forbidden, userId in body does not match authenticated user', { correlationId, authUserId, bodyUserId: req.body.userId, type: 'ControllerAuthError.createPostMismatch' });
+        return res.status(403).json({ message: 'Forbidden: Cannot create post for another user', correlationId });
+    }
+
     this.logger.info('PostController: createPost initiated', { correlationId, body: req.body, type: 'ControllerLog.createPost' });
     try {
       const { userId, title, content } = req.body;
@@ -59,10 +70,17 @@ export class PostController {
   async updatePost(req: ExpressRequest, res: Response) {
     const typedReq = req as RequestWithId;
     const correlationId = typedReq.id;
+    const authUserId = typedReq.authUserId;
     const postId = req.params.postId;
+
+    if (!authUserId) {
+      this.logger.warn('PostController: updatePost - Unauthorized, no authenticated user', { correlationId, postId, type: 'ControllerAuthError.updatePostNoAuthUser' });
+      return res.status(401).json({ message: 'Unauthorized: Missing authentication', correlationId });
+    }
+
     this.logger.info('PostController: updatePost initiated', { correlationId, postId, body: req.body, type: 'ControllerLog.updatePost' });
     try {
-      const updatedPost = await this.postService.updatePost(postId, req.body, correlationId);
+      const updatedPost = await this.postService.updatePost(postId, req.body, authUserId, correlationId);
       if (updatedPost) {
         this.logger.info('PostController: updatePost successful', { correlationId, postId, type: 'ControllerLog.updatePost' });
         res.json(updatedPost);
@@ -71,8 +89,16 @@ export class PostController {
         res.status(404).json({ message: 'Post not found', correlationId });
       }
     } catch (error: any) {
-      this.logger.error('PostController: updatePost - Internal server error', { correlationId, postId, error: error.message, stack: error.stack, type: 'ControllerError.updatePost' });
-      res.status(500).json({ message: 'Internal server error', correlationId });
+      if (error.message === 'Forbidden') {
+        this.logger.warn('PostController: updatePost - Forbidden by service', { correlationId, authUserId, postId, type: 'ControllerAuthError.updatePostForbiddenByService' });
+        res.status(403).json({ message: 'Forbidden: You do not have permission to update this post', correlationId });
+      } else if (error.message === 'Post not found for update') {
+        this.logger.warn('PostController: updatePost - Post not found by service for update', { correlationId, authUserId, postId, type: 'ControllerNotFound.updatePostNotFoundByService' });
+        res.status(404).json({ message: 'Post not found', correlationId });
+      } else {
+        this.logger.error('PostController: updatePost - Internal server error', { correlationId, postId, error: error.message, stack: error.stack, type: 'ControllerError.updatePost' });
+        res.status(500).json({ message: 'Internal server error', correlationId });
+      }
     }
   }
 
@@ -80,9 +106,16 @@ export class PostController {
     const typedReq = req as RequestWithId;
     const correlationId = typedReq.id;
     const postId = req.params.postId;
-    this.logger.info('PostController: deletePost initiated', { correlationId, postId, type: 'ControllerLog.deletePost' });
+    const authUserId = typedReq.authUserId;
+
+    if (!authUserId) {
+      this.logger.warn('PostController: deletePost - Unauthorized, no authenticated user', { correlationId, postId, type: 'ControllerAuthError.deletePostNoAuthUser' });
+      return res.status(401).json({ message: 'Unauthorized: Missing authentication', correlationId });
+    }
+
+    this.logger.info('PostController: deletePost initiated', { correlationId, postId, authUserId, type: 'ControllerLog.deletePost' });
     try {
-      const deleted = await this.postService.deletePost(postId, correlationId);
+      const deleted = await this.postService.deletePost(postId, authUserId, correlationId);
       if (deleted) {
         this.logger.info('PostController: deletePost successful', { correlationId, postId, type: 'ControllerLog.deletePost' });
         res.status(204).send();
@@ -91,8 +124,16 @@ export class PostController {
         res.status(404).json({ message: 'Post not found', correlationId });
       }
     } catch (error: any) {
-      this.logger.error('PostController: deletePost - Internal server error', { correlationId, postId, error: error.message, stack: error.stack, type: 'ControllerError.deletePost' });
-      res.status(500).json({ message: 'Internal server error', correlationId });
+      if (error.message === 'Forbidden') {
+        this.logger.warn('PostController: deletePost - Forbidden by service', { correlationId, authUserId, postId, type: 'ControllerAuthError.deletePostForbiddenByService' });
+        res.status(403).json({ message: 'Forbidden: You do not have permission to delete this post', correlationId });
+      } else if (error.message === 'Post not found for deletion') {
+          this.logger.warn('PostController: deletePost - Post not found by service for deletion', { correlationId, authUserId, postId, type: 'ControllerNotFound.deletePostNotFoundByService' });
+          res.status(404).json({ message: 'Post not found', correlationId });
+      } else {
+        this.logger.error('PostController: deletePost - Internal server error', { correlationId, postId, error: error.message, stack: error.stack, type: 'ControllerError.deletePost' });
+        res.status(500).json({ message: 'Internal server error', correlationId });
+      }
     }
   }
 

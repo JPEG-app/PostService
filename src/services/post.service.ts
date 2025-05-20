@@ -46,7 +46,12 @@ export class PostService {
     }
   }
 
-  async createPost(postData: PostCreationAttributes, correlationId?: string): Promise<Post> {
+  async createPost(postData: PostCreationAttributes, correlationId?: string, requestingAuthUserId?: string): Promise<Post> {
+    if (requestingAuthUserId && postData.userId !== requestingAuthUserId) {
+      this.logger.error('PostService: createPost - Forbidden, userId mismatch.', { type: 'ServiceAuthError.createPostMismatch' });
+      throw new Error('Forbidden');
+    }
+
     this.logger.info('PostService: createPost initiated', { correlationId, userId: postData.userId, type: 'ServiceLog.createPost' });
     const userExists = await this.cachedUserRepository.findCachedUserById(postData.userId, correlationId);
 
@@ -83,9 +88,19 @@ export class PostService {
     return post;
   }
 
-  async updatePost(postId: string, updatedPostData: PostUpdateAttributes, correlationId?: string): Promise<Post | undefined> {
+  async updatePost(postId: string, updatedPostData: PostUpdateAttributes, requestingAuthUserId: string, correlationId?: string): Promise<Post | undefined> {
     this.logger.info('PostService: updatePost initiated', { correlationId, postId, data: updatedPostData, type: 'ServiceLog.updatePost' });
     const post = await this.postRepository.updatePost(postId, updatedPostData, correlationId);
+    const existingPost = await this.postRepository.findPostById(postId, correlationId);
+    if (!existingPost) {
+      this.logger.warn('PostService: updatePost - Post not found for update', { /*...*/ });
+      throw new Error('Post not found for update');
+    }
+    if (existingPost.userId !== requestingAuthUserId) {
+      this.logger.error('PostService: updatePost - Forbidden, user is not author.', { /*...*/ type: 'ServiceAuthError.updatePostForbidden' });
+      throw new Error('Forbidden');
+    }
+
     if (post) {
         this.logger.info('PostService: updatePost successful', { correlationId, postId, type: 'ServiceLog.updatePostSuccess' });
     } else {
@@ -94,8 +109,17 @@ export class PostService {
     return post;
   }
 
-  async deletePost(postId: string, correlationId?: string): Promise<boolean> {
+  async deletePost(postId: string, requestingAuthUserId: string, correlationId?: string): Promise<boolean> {
     this.logger.info('PostService: deletePost initiated', { correlationId, postId, type: 'ServiceLog.deletePost' });
+    const existingPost = await this.postRepository.findPostById(postId, correlationId);
+    if (!existingPost) {
+      this.logger.warn('PostService: deletePost - Post not found for deletion', { /*...*/ });
+      throw new Error('Post not found for deletion');
+    }
+    if (existingPost.userId !== requestingAuthUserId) {
+      this.logger.error('PostService: deletePost - Forbidden, user is not author.', { /*...*/ type: 'ServiceAuthError.deletePostForbidden' });
+      throw new Error('Forbidden');
+    }
     const success = await this.postRepository.deletePost(postId, correlationId);
     if (success) {
         this.logger.info('PostService: deletePost successful', { correlationId, postId, type: 'ServiceLog.deletePostSuccess' });

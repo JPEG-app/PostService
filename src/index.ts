@@ -1,30 +1,40 @@
+// post-service/src/index.ts
 import { App } from './app';
 import * as dotenv from 'dotenv';
-import { startUserEventsConsumer, stopUserEventsConsumer } from './kafka/consumer';
+import { startUserEventsConsumer, stopUserEventsConsumer, initializeConsumerDependencies } from './kafka/consumer'; // Updated import for initializeConsumerDependencies
 import { getKafkaProducer as getPostProducer, disconnectProducer as disconnectPostProducer, initializeKafkaProducerLogger } from './kafka/producer';
-import logger from './utils/logger'; 
+import logger from './utils/logger';
 
 dotenv.config();
 
-const port = process.env.PORT || 3001; 
+const port = process.env.PORT || 3001;
+const jwtSecret = process.env.JWT_SECRET; // Get JWT_SECRET
+
+if (!jwtSecret) {
+  logger.error('PostService: JWT_SECRET environment variable is not set.', { type: 'StartupLog.FatalConfigError' });
+  process.exit(1);
+}
 
 const startService = async () => {
   logger.info('Post Service starting...', { type: 'StartupLog.Init' });
   try {
     initializeKafkaProducerLogger(logger);
-    await startUserEventsConsumer(logger);
+    // Pass logger to initializeConsumerDependencies
+    initializeConsumerDependencies(logger);
+    await startUserEventsConsumer(logger); // startUserEventsConsumer might not need logger if initializeConsumerDependencies sets it globally
     logger.info('Kafka consumer for user events started successfully.', { type: 'StartupLog.UserConsumerReady' });
 
     await getPostProducer(logger);
     logger.info('Kafka producer for post events initialized successfully.', { type: 'StartupLog.PostProducerReady' });
 
-    const appInstance = new App(); 
+    const appInstance = new App(jwtSecret); // Pass jwtSecret to App
     const expressApp = appInstance.app;
 
     const server = expressApp.listen(port, () => {
       logger.info(`Post Service is running on port ${port}`, { port, type: 'StartupLog.HttpReady' });
     });
 
+    // ... (shutdown logic remains the same) ...
     const shutdown = async (signal: string) => {
       logger.info(`${signal} received. Shutting down Post Service gracefully.`, { signal, type: 'ShutdownLog.SignalReceived' });
       server.close(async (err?: Error) => {
@@ -56,8 +66,10 @@ const startService = async () => {
         logger.error('Unhandled promise rejection:', { reason, type: 'FatalErrorLog.UnhandledRejection' });
     });
 
+
   } catch (error: any) {
     logger.error('Failed to start Post Service or Kafka components.', { error: error.message, stack: error.stack, type: 'StartupLog.FatalError' });
+    // ... (shutdown logic on failure remains the same) ...
     await stopUserEventsConsumer().catch(e => logger.error("Error stopping user consumer during failed startup", { error: (e as Error).message, type: 'ShutdownLog.UserConsumerFailStop'}));
     await disconnectPostProducer().catch(e => logger.error("Error stopping post producer during failed startup", { error: (e as Error).message, type: 'ShutdownLog.PostProducerFailStop'}));
     process.exit(1);
