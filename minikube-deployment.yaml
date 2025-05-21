@@ -61,7 +61,7 @@ spec:
         - containerPort: 5432
         envFrom:
         - secretRef:
-            name: post-db-secret
+            name: db-secret
         - configMapRef:
             name: post-db-config
         volumeMounts:
@@ -97,7 +97,7 @@ kind: Deployment
 metadata:
   name: post-service-deployment
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: post-service
@@ -108,8 +108,8 @@ spec:
     spec:
       containers:
       - name: post-service
-        image: post-service:latest 
-        imagePullPolicy: Never
+        image: dgeorgiev0348/post-service:latest 
+        imagePullPolicy: Always
         ports:
         - containerPort: 3002
         env:
@@ -176,7 +176,7 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: post-service-deployment
-  minReplicas: 2
+  minReplicas: 1
   maxReplicas: 5
   metrics:
   - type: Resource
