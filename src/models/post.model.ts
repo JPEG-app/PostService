@@ -14,6 +14,13 @@ export interface PostCreationAttributes {
 }
 
 export interface PostUpdateAttributes {
-  title: string;
-  content: string;
+  title?: string;
+  content?: string;
+}
+
+export interface Like {
+  likeId?: string; 
+  userId: string;
+  postId: string;
+  createdAt?: Date;
 }

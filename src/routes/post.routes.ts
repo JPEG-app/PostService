@@ -33,5 +33,10 @@ export const setupPostRoutes = (logger: winston.Logger, tokenService: TokenServi
   router.get('/users/:userId/posts', postController.getPostsByUserId.bind(postController));
   router.get('/posts', postController.getAllPosts.bind(postController));
 
+  router.post('/posts/:postId/like', requireAuth, postController.likePost.bind(postController));
+  router.delete('/posts/:postId/like', requireAuth, postController.unlikePost.bind(postController));
+  router.get('/posts/:postId/likes/count', postController.getPostLikeCount.bind(postController)); // Publicly accessible count
+  router.get('/posts/:postId/like/status', requireAuth, postController.checkUserLike.bind(postController)); 
+
   return router;
 };

@@ -1,4 +1,4 @@
-import { Post, PostCreationAttributes, PostUpdateAttributes } from '../models/post.model';
+import { Post, PostCreationAttributes, PostUpdateAttributes, Like } from '../models/post.model';
 import { PostRepository } from '../repositories/post.repository';
 import { CachedUserRepository } from '../repositories/cachedUser.repository';
 import { getKafkaProducer } from '../kafka/producer';
@@ -48,7 +48,7 @@ export class PostService {
 
   async createPost(postData: PostCreationAttributes, correlationId?: string, requestingAuthUserId?: string): Promise<Post> {
     if (requestingAuthUserId && postData.userId !== requestingAuthUserId) {
-      this.logger.error('PostService: createPost - Forbidden, userId mismatch.', { type: 'ServiceAuthError.createPostMismatch' });
+      this.logger.error('PostService: createPost - Forbidden, userId mismatch.', { correlationId, type: 'ServiceAuthError.createPostMismatch' });
       throw new Error('Forbidden');
     }
 
@@ -89,42 +89,42 @@ export class PostService {
   }
 
   async updatePost(postId: string, updatedPostData: PostUpdateAttributes, requestingAuthUserId: string, correlationId?: string): Promise<Post | undefined> {
-    this.logger.info('PostService: updatePost initiated', { correlationId, postId, data: updatedPostData, type: 'ServiceLog.updatePost' });
-    const post = await this.postRepository.updatePost(postId, updatedPostData, correlationId);
+    this.logger.info('PostService: updatePost initiated', { correlationId, postId, data: updatedPostData, requestingAuthUserId, type: 'ServiceLog.updatePost' });
     const existingPost = await this.postRepository.findPostById(postId, correlationId);
     if (!existingPost) {
-      this.logger.warn('PostService: updatePost - Post not found for update', { /*...*/ });
-      throw new Error('Post not found for update');
+      this.logger.warn('PostService: updatePost - Post not found for update', { correlationId, postId, type: 'ServiceLog.updatePostNotFoundForUpdate' });
+      throw new Error('Post not found');
     }
     if (existingPost.userId !== requestingAuthUserId) {
-      this.logger.error('PostService: updatePost - Forbidden, user is not author.', { /*...*/ type: 'ServiceAuthError.updatePostForbidden' });
+      this.logger.error('PostService: updatePost - Forbidden, user is not author.', { correlationId, postId, postAuthor: existingPost.userId, requestingAuthUserId, type: 'ServiceAuthError.updatePostForbidden' });
       throw new Error('Forbidden');
     }
 
+    const post = await this.postRepository.updatePost(postId, updatedPostData, correlationId);
     if (post) {
         this.logger.info('PostService: updatePost successful', { correlationId, postId, type: 'ServiceLog.updatePostSuccess' });
     } else {
-        this.logger.warn('PostService: updatePost - Post not found or no changes made', { correlationId, postId, type: 'ServiceLog.updatePostNotFoundOrNoChange' });
+        this.logger.warn('PostService: updatePost - Post not found or no changes made after attempting update', { correlationId, postId, type: 'ServiceLog.updatePostNotFoundOrNoChangeAfterAttempt' });
     }
     return post;
   }
 
   async deletePost(postId: string, requestingAuthUserId: string, correlationId?: string): Promise<boolean> {
-    this.logger.info('PostService: deletePost initiated', { correlationId, postId, type: 'ServiceLog.deletePost' });
+    this.logger.info('PostService: deletePost initiated', { correlationId, postId, requestingAuthUserId, type: 'ServiceLog.deletePost' });
     const existingPost = await this.postRepository.findPostById(postId, correlationId);
     if (!existingPost) {
-      this.logger.warn('PostService: deletePost - Post not found for deletion', { /*...*/ });
-      throw new Error('Post not found for deletion');
+      this.logger.warn('PostService: deletePost - Post not found for deletion', { correlationId, postId, type: 'ServiceLog.deletePostNotFoundForDeletion' });
+      throw new Error('Post not found');
     }
     if (existingPost.userId !== requestingAuthUserId) {
-      this.logger.error('PostService: deletePost - Forbidden, user is not author.', { /*...*/ type: 'ServiceAuthError.deletePostForbidden' });
+      this.logger.error('PostService: deletePost - Forbidden, user is not author.', { correlationId, postId, postAuthor: existingPost.userId, requestingAuthUserId, type: 'ServiceAuthError.deletePostForbidden' });
       throw new Error('Forbidden');
     }
     const success = await this.postRepository.deletePost(postId, correlationId);
     if (success) {
         this.logger.info('PostService: deletePost successful', { correlationId, postId, type: 'ServiceLog.deletePostSuccess' });
     } else {
-        this.logger.warn('PostService: deletePost - Post not found', { correlationId, postId, type: 'ServiceLog.deletePostNotFound' });
+        this.logger.warn('PostService: deletePost - Deletion failed in repository', { correlationId, postId, type: 'ServiceLog.deletePostRepoFail' });
     }
     return success;
   }
@@ -141,5 +141,76 @@ export class PostService {
     const posts = await this.postRepository.findAllPosts(correlationId);
     this.logger.info(`PostService: findAllPosts found ${posts.length} posts`, { correlationId, count: posts.length, type: 'ServiceLog.findAllPostsResult' });
     return posts;
+  }
+
+  async likePost(postId: string, userId: string, correlationId?: string): Promise<Like> {
+    this.logger.info('PostService: likePost initiated', { correlationId, postId, userId, type: 'ServiceLog.likePost' });
+    const postExists = await this.postRepository.findPostById(postId, correlationId);
+    if (!postExists) {
+        this.logger.warn('PostService: likePost - Post not found', { correlationId, postId, type: 'ServiceValidationWarn.likePostNotFound' });
+        throw new Error('Post not found');
+    }
+    const userExists = await this.cachedUserRepository.findCachedUserById(userId, correlationId);
+    if (!userExists) {
+        this.logger.warn('PostService: likePost - User not found in cache', { correlationId, userId, type: 'ServiceValidationWarn.likePostUserNotFound' });
+        throw new Error('User not found');
+    }
+    
+    try {
+        const newLike = await this.postRepository.createLike(userId, postId, correlationId);
+        this.logger.info('PostService: likePost successful', { correlationId, postId, userId, likeId: newLike.likeId, type: 'ServiceLog.likePostSuccess' });
+        return newLike;
+    } catch (error: any) {
+        if (error.message === 'Like already exists') {
+            this.logger.info('PostService: likePost - User already liked this post', { correlationId, postId, userId, type: 'ServiceLog.likePostAlreadyLiked' });
+            // Optionally, find and return the existing like
+            const existingLike = await this.postRepository.findLikeByUserAndPost(userId, postId, correlationId);
+            if (!existingLike) { // Should not happen if UniqueConstraintError was thrown
+                this.logger.error('PostService: likePost - Could not find existing like after UniqueConstraintError', { correlationId, postId, userId, type: 'ServiceError.likePostAlreadyLikedNotFound' });
+                throw new Error('Failed to process like action');
+            }
+            return existingLike;
+        }
+        this.logger.error('PostService: likePost - Error creating like', { correlationId, postId, userId, error: error.message, type: 'ServiceError.likePost' });
+        throw error;
+    }
+  }
+
+  async unlikePost(postId: string, userId: string, correlationId?: string): Promise<boolean> {
+    this.logger.info('PostService: unlikePost initiated', { correlationId, postId, userId, type: 'ServiceLog.unlikePost' });
+    const postExists = await this.postRepository.findPostById(postId, correlationId);
+    if (!postExists) {
+        this.logger.warn('PostService: unlikePost - Post not found', { correlationId, postId, type: 'ServiceValidationWarn.unlikePostNotFound' });
+        throw new Error('Post not found');
+    }
+    // No need to check cachedUser for unliking, if the like exists, the user existed at some point.
+
+    const success = await this.postRepository.deleteLike(userId, postId, correlationId);
+    if (success) {
+        this.logger.info('PostService: unlikePost successful', { correlationId, postId, userId, type: 'ServiceLog.unlikePostSuccess' });
+    } else {
+        this.logger.info('PostService: unlikePost - Like not found or already unliked', { correlationId, postId, userId, type: 'ServiceLog.unlikePostNotFoundOrAlreadyUnliked' });
+    }
+    return success;
+  }
+
+  async getLikeCount(postId: string, correlationId?: string): Promise<number> {
+    this.logger.info('PostService: getLikeCount initiated', { correlationId, postId, type: 'ServiceLog.getLikeCount' });
+    const postExists = await this.postRepository.findPostById(postId, correlationId);
+    if (!postExists) {
+        this.logger.warn('PostService: getLikeCount - Post not found', { correlationId, postId, type: 'ServiceValidationWarn.getLikeCountPostNotFound' });
+        throw new Error('Post not found');
+    }
+    const count = await this.postRepository.countLikesForPost(postId, correlationId);
+    this.logger.info('PostService: getLikeCount successful', { correlationId, postId, count, type: 'ServiceLog.getLikeCountSuccess' });
+    return count;
+  }
+
+  async hasUserLikedPost(postId: string, userId: string, correlationId?: string): Promise<boolean> {
+    this.logger.info('PostService: hasUserLikedPost initiated', { correlationId, postId, userId, type: 'ServiceLog.hasUserLikedPost' });
+    const like = await this.postRepository.findLikeByUserAndPost(userId, postId, correlationId);
+    const hasLiked = !!like;
+    this.logger.info(`PostService: hasUserLikedPost result: ${hasLiked}`, { correlationId, postId, userId, hasLiked, type: 'ServiceLog.hasUserLikedPostResult' });
+    return hasLiked;
   }
 }
