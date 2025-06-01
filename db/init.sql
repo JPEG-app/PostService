@@ -13,10 +13,10 @@ CREATE TABLE IF NOT EXISTS cached_valid_users (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE likes (
+CREATE TABLE IF NOT EXISTS likes (
     like_id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    user_id UUID NOT NULL,
-    post_id UUID NOT NULL,
+    user_id SERIAL NOT NULL,
+    post_id SERIAL NOT NULL,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_post_for_like
         FOREIGN KEY(post_id)

@@ -1,0 +1,201 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-secret
+type: Opaque
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: user-service-secret
+type: Opaque
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: post-db-config
+data:
+  POSTGRES_DB: "posts"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: post-service-config
+data:
+  NODE_ENV: "production"
+  PORT: "3002"
+  DB_HOST: "post-db-service"
+  DB_NAME: "posts"
+  USER_SERVICE_URL: "http://user-service-service:3001"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: post-db-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: post-db-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-post-db
+  template:
+    metadata:
+      labels:
+        app: postgres-post-db
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5432
+        envFrom:
+        - secretRef:
+            name: db-secret
+        - configMapRef:
+            name: post-db-config
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+        volumeMounts:
+        - name: post-db-storage
+          mountPath: /var/lib/postgresql/data
+          subPath: postgres-post-data
+        - name: post-db-init-scripts-volume
+          mountPath: /docker-entrypoint-initdb.d
+          readOnly: true
+      volumes:
+      - name: post-db-storage
+        persistentVolumeClaim:
+          claimName: post-db-pvc
+      - name: post-db-init-scripts-volume
+        configMap:
+          name: post-db-init-scripts-cm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: post-db-service
+spec:
+  selector:
+    app: postgres-post-db
+  ports:
+  - protocol: TCP
+    port: 5432
+    targetPort: 5432
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: post-service-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: post-service
+  template:
+    metadata:
+      labels:
+        app: post-service
+    spec:
+      containers:
+      - name: post-service
+        image: dgeorgiev0348/post-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3002
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "250m"
+            memory: "256Mi"
+        env:
+        - name: NODE_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: post-service-config
+              key: NODE_ENV
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: post-service-config
+              key: PORT
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: post-service-config
+              key: DB_HOST
+        - name: DB_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: post-service-config
+              key: DB_NAME
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: db-secret
+              key: POSTGRES_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-secret
+              key: POSTGRES_PASSWORD
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: user-service-secret
+              key: JWT_SECRET
+        - name: USER_SERVICE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: post-service-config
+              key: USER_SERVICE_URL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: post-service-service
+spec:
+  selector:
+    app: post-service
+  ports:
+  - protocol: TCP
+    port: 3002
+    targetPort: 3002
+  type: NodePort
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: post-service-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: post-service-deployment
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
