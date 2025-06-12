@@ -25,11 +25,25 @@ export class App {
 
   private config(): void {
     this.app.use(assignRequestId);
-    // REMOVE: this.app.use(extractAuthUserMiddleware);
+    
+    const allowedOrigins = [
+      'https://jpegapp.lol',
+      'https://www.jpegapp.lol'
+    ];
 
-    const allowedOrigins = [ /* ... */ ];
-    const corsOptions: cors.CorsOptions = { /* ... */ };
+    const corsOptions: cors.CorsOptions = {
+      origin: function (origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          logger.warn('CORS blocked request', { origin, type: 'CorsErrorLog' });
+          callback(new Error('Not allowed by CORS'));
+        }
+      },
+      credentials: true,
+    };
     this.app.use(cors(corsOptions));
+    
     this.app.use(bodyParser.json());
     this.app.use(bodyParser.urlencoded({ extended: false }));
     this.app.use(requestLogger);
