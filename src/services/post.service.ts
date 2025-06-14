@@ -77,9 +77,9 @@ export class PostService {
     return createdPost;
   }
 
-  async findPostById(postId: string, correlationId?: string): Promise<Post | undefined> {
+  async findPostById(postId: string, correlationId?: string, requestingAuthUserId?: string): Promise<Post | undefined> {
     this.logger.info('PostService: findPostById initiated', { correlationId, postId, type: 'ServiceLog.findPostById' });
-    const post = await this.postRepository.findPostById(postId, correlationId);
+    const post = await this.postRepository.findPostById(postId, correlationId, requestingAuthUserId);
     if (post) {
         this.logger.info('PostService: findPostById successful', { correlationId, postId, type: 'ServiceLog.findPostByIdFound' });
     } else {
@@ -101,8 +101,10 @@ export class PostService {
     }
 
     const post = await this.postRepository.updatePost(postId, updatedPostData, correlationId);
+    
     if (post) {
-        this.logger.info('PostService: updatePost successful', { correlationId, postId, type: 'ServiceLog.updatePostSuccess' });
+        this.logger.info('PostService: updatePost successful, re-fetching with like data', { correlationId, postId, type: 'ServiceLog.updatePostSuccess' });
+        return this.findPostById(postId, correlationId, requestingAuthUserId);
     } else {
         this.logger.warn('PostService: updatePost - Post not found or no changes made after attempting update', { correlationId, postId, type: 'ServiceLog.updatePostNotFoundOrNoChangeAfterAttempt' });
     }
@@ -129,16 +131,16 @@ export class PostService {
     return success;
   }
 
-  async findPostsByUserId(userId: string, correlationId?: string): Promise<Post[]> {
+  async findPostsByUserId(userId: string, correlationId?: string, requestingAuthUserId?: string): Promise<Post[]> {
     this.logger.info('PostService: findPostsByUserId initiated', { correlationId, userId, type: 'ServiceLog.findPostsByUserId' });
-    const posts = await this.postRepository.findPostsByUserId(userId, correlationId);
+    const posts = await this.postRepository.findPostsByUserId(userId, correlationId, requestingAuthUserId);
     this.logger.info(`PostService: findPostsByUserId found ${posts.length} posts`, { correlationId, userId, count: posts.length, type: 'ServiceLog.findPostsByUserIdResult' });
     return posts;
   }
 
-  async findAllPosts(correlationId?: string): Promise<Post[]> {
+  async findAllPosts(correlationId?: string, requestingAuthUserId?: string): Promise<Post[]> {
     this.logger.info('PostService: findAllPosts initiated', { correlationId, type: 'ServiceLog.findAllPosts' });
-    const posts = await this.postRepository.findAllPosts(correlationId);
+    const posts = await this.postRepository.findAllPosts(correlationId, requestingAuthUserId);
     this.logger.info(`PostService: findAllPosts found ${posts.length} posts`, { correlationId, count: posts.length, type: 'ServiceLog.findAllPostsResult' });
     return posts;
   }
@@ -163,9 +165,8 @@ export class PostService {
     } catch (error: any) {
         if (error.message === 'Like already exists') {
             this.logger.info('PostService: likePost - User already liked this post', { correlationId, postId, userId, type: 'ServiceLog.likePostAlreadyLiked' });
-            // Optionally, find and return the existing like
             const existingLike = await this.postRepository.findLikeByUserAndPost(userId, postId, correlationId);
-            if (!existingLike) { // Should not happen if UniqueConstraintError was thrown
+            if (!existingLike) { 
                 this.logger.error('PostService: likePost - Could not find existing like after UniqueConstraintError', { correlationId, postId, userId, type: 'ServiceError.likePostAlreadyLikedNotFound' });
                 throw new Error('Failed to process like action');
             }
@@ -183,7 +184,6 @@ export class PostService {
         this.logger.warn('PostService: unlikePost - Post not found', { correlationId, postId, type: 'ServiceValidationWarn.unlikePostNotFound' });
         throw new Error('Post not found');
     }
-    // No need to check cachedUser for unliking, if the like exists, the user existed at some point.
 
     const success = await this.postRepository.deleteLike(userId, postId, correlationId);
     if (success) {

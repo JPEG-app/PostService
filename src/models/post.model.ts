@@ -5,6 +5,8 @@ export interface Post {
   content: string;
   createdAt?: Date;
   updatedAt?: Date;
+  likeCount?: number;
+  hasUserLiked?: boolean;
 }
 
 export interface PostCreationAttributes {

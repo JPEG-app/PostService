@@ -141,8 +141,8 @@ LikeModel.init(
   }
 );
 
-PostModel.hasMany(LikeModel, { foreignKey: 'postId', as: 'postLikes' });
-LikeModel.belongsTo(PostModel, { foreignKey: 'postId' });
+PostModel.hasMany(LikeModel, { foreignKey: 'post_id', as: 'postLikes' });
+LikeModel.belongsTo(PostModel, { foreignKey: 'post_id' });
 
 let repositoryLogger: winston.Logger;
 
@@ -163,10 +163,15 @@ export class PostRepository {
 
   private toPost(internalPost: PostModel): Post {
     const json = internalPost.toJSON() as InternalPostAttributes;
+    const likeCount = parseInt(internalPost.get('likeCount' as any) || '0', 10);
+    const hasUserLiked = !!internalPost.get('hasUserLiked' as any);
+
     return {
       ...json,
       postId: json.postId.toString(),
       userId: json.userId.toString(),
+      likeCount: isNaN(likeCount) ? 0 : likeCount,
+      hasUserLiked: hasUserLiked,
     };
   }
 
@@ -199,6 +204,39 @@ export class PostRepository {
     });
   }
 
+  private getPostFindOptions(requestingUserId?: string) {
+    const attributes: any = {
+      include: [
+        [
+          Sequelize.fn('COUNT', Sequelize.col('postLikes.like_id')),
+          'likeCount'
+        ]
+      ]
+    };
+
+    if (requestingUserId) {
+        const numericUserId = parseInt(requestingUserId, 10);
+        if (!isNaN(numericUserId)) {
+            const hasLikedSubquery = Sequelize.literal(
+              `(EXISTS (SELECT 1 FROM likes WHERE likes.post_id = "PostModel".post_id AND likes.user_id = ${numericUserId}))`
+            );
+            attributes.include.push([hasLikedSubquery, 'hasUserLiked']);
+        }
+    }
+
+    return {
+      attributes,
+      include: [{
+        model: LikeModel,
+        as: 'postLikes',
+        attributes: [],
+        required: false,
+      }],
+      group: ['PostModel.post_id'],
+      subQuery: false
+    };
+  }
+
   async createPost(post: PostCreationAttributes, correlationId?: string): Promise<Post> {
     const operation = "createPost";
     this.logger.info(`PostRepository: ${operation} initiated`, { correlationId, userId: post.userId, type: `DBLog.${operation}` });
@@ -215,22 +253,33 @@ export class PostRepository {
       this.logQuery(`PostModel.create`, creationData, correlationId, operation);
       const newPost = await PostModel.create(creationData);
       this.logger.info(`PostRepository: ${operation} successful`, { correlationId, postId: newPost.postId, type: `DBLog.${operation}Success` });
-      return this.toPost(newPost);
+      
+      const postWithDefaults = this.toPost(newPost);
+      postWithDefaults.likeCount = 0;
+      postWithDefaults.hasUserLiked = false;
+      return postWithDefaults;
+
     } catch (error: any) {
       this.logger.error(`PostRepository: Error in ${operation}`, { correlationId, error: error.message, stack: error.stack, type: `DBError.${operation}` });
       throw new Error('Database error: ' + error.message);
     }
   }
 
-  async findPostById(postId: string, correlationId?: string): Promise<Post | undefined> {
+  async findPostById(postId: string, correlationId?: string, requestingUserId?: string): Promise<Post | undefined> {
     const operation = "findPostById";
     this.logger.info(`PostRepository: ${operation} initiated`, { correlationId, postId, type: `DBLog.${operation}` });
     try {
       const numericPostId = parseInt(postId, 10);
       if (isNaN(numericPostId)) return undefined;
 
-      this.logQuery(`PostModel.findByPk`, { postId: numericPostId }, correlationId, operation);
-      const postInstance = await PostModel.findByPk(numericPostId);
+      const findOptions = this.getPostFindOptions(requestingUserId);
+      
+      this.logQuery(`PostModel.findOne with aggregations`, { where: { postId: numericPostId } }, correlationId, operation);
+      const postInstance = await PostModel.findOne({
+          ...findOptions,
+          where: { postId: numericPostId },
+      });
+
       if (postInstance) {
         this.logger.info(`PostRepository: ${operation} found post`, { correlationId, postId, type: `DBLog.${operation}Found` });
       } else {
@@ -316,15 +365,21 @@ export class PostRepository {
     }
   }
 
-  async findPostsByUserId(userId: string, correlationId?: string): Promise<Post[]> {
+  async findPostsByUserId(userId: string, correlationId?: string, requestingUserId?: string): Promise<Post[]> {
     const operation = "findPostsByUserId";
     this.logger.info(`PostRepository: ${operation} initiated`, { correlationId, userId, type: `DBLog.${operation}` });
     try {
       const numericUserId = parseInt(userId, 10);
       if (isNaN(numericUserId)) return [];
 
-      this.logQuery(`PostModel.findAll`, { where: { userId: numericUserId } }, correlationId, operation);
-      const posts = await PostModel.findAll({ where: { userId: numericUserId } });
+      const findOptions = this.getPostFindOptions(requestingUserId);
+
+      this.logQuery(`PostModel.findAll with aggregations`, { where: { userId: numericUserId } }, correlationId, operation);
+      const posts = await PostModel.findAll({
+          ...findOptions, 
+          where: { userId: numericUserId },
+          order: [['createdAt', 'DESC']]
+      });
       this.logger.info(`PostRepository: ${operation} found ${posts.length} posts`, { correlationId, userId, count: posts.length, type: `DBLog.${operation}Result` });
       return posts.map(post => this.toPost(post));
     } catch (error: any) {
@@ -333,12 +388,17 @@ export class PostRepository {
     }
   }
 
-  async findAllPosts(correlationId?: string): Promise<Post[]> {
+  async findAllPosts(correlationId?: string, requestingUserId?: string): Promise<Post[]> {
     const operation = "findAllPosts";
     this.logger.info(`PostRepository: ${operation} initiated`, { correlationId, type: `DBLog.${operation}` });
     try {
-      this.logQuery(`PostModel.findAll`, {}, correlationId, operation);
-      const posts = await PostModel.findAll();
+      const findOptions = this.getPostFindOptions(requestingUserId);
+
+      this.logQuery(`PostModel.findAll with aggregations`, {}, correlationId, operation);
+      const posts = await PostModel.findAll({
+          ...findOptions,
+          order: [['createdAt', 'DESC']]
+      });
       this.logger.info(`PostRepository: ${operation} found ${posts.length} posts`, { correlationId, count: posts.length, type: `DBLog.${operation}Result` });
       return posts.map(post => this.toPost(post));
     } catch (error: any) {
