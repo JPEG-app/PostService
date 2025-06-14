@@ -21,7 +21,7 @@ interface InternalPostAttributes {
   postId: number;
   userId: number;
   title: string;
-  content: string;
+  content:string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -163,15 +163,15 @@ export class PostRepository {
 
   private toPost(internalPost: PostModel): Post {
     const json = internalPost.toJSON() as InternalPostAttributes;
-    const likeCount = parseInt(internalPost.get('likeCount' as any) || '0', 10);
-    const hasUserLiked = !!internalPost.get('hasUserLiked' as any);
+    const likeCount = parseInt(internalPost.getDataValue('likeCount' as any) || '0', 10);
+    const hasUserLiked = internalPost.getDataValue('hasUserLiked' as any);
 
     return {
       ...json,
       postId: json.postId.toString(),
       userId: json.userId.toString(),
       likeCount: isNaN(likeCount) ? 0 : likeCount,
-      hasUserLiked: hasUserLiked,
+      hasUserLiked: !!hasUserLiked,
     };
   }
 
@@ -218,7 +218,7 @@ export class PostRepository {
         const numericUserId = parseInt(requestingUserId, 10);
         if (!isNaN(numericUserId)) {
             const hasLikedSubquery = Sequelize.literal(
-              `(EXISTS (SELECT 1 FROM likes WHERE likes.post_id = "PostModel".post_id AND likes.user_id = ${numericUserId}))`
+              `(EXISTS (SELECT 1 FROM likes WHERE likes.post_id = "PostModel"."post_id" AND likes.user_id = ${numericUserId}))`
             );
             attributes.include.push([hasLikedSubquery, 'hasUserLiked']);
         }
