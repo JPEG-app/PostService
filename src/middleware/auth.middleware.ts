@@ -31,17 +31,18 @@ export function tryAuthMiddleware(tokenService: TokenService, logger: winston.Lo
   return async (req: RequestWithId, res: Response, next: NextFunction) => {
     const correlationId = req.id;
     const authHeader = req.headers.authorization;
+    const internalUserId = req.headers['x-user-id'] as string; 
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.split(' ')[1];
       const decoded = await tokenService.verifyToken(token, correlationId);
-
       if (decoded && decoded.userId) {
         req.authUserId = decoded.userId;
-        logger.info('tryAuthMiddleware (post-service): User identified', { correlationId, authUserId: req.authUserId, url: req.originalUrl, type: 'tryAuthMiddleware.PostService.Success' });
-      } else {
-        logger.warn('tryAuthMiddleware (post-service): Invalid token provided, proceeding as anonymous', { correlationId, url: req.originalUrl, type: 'tryAuthMiddleware.PostService.InvalidToken' });
+        logger.info('tryAuthMiddleware (post-service): User identified via Bearer token', { correlationId, authUserId: req.authUserId });
       }
+    } else if (internalUserId) {
+      req.authUserId = internalUserId;
+      logger.info('tryAuthMiddleware (post-service): User identified via internal X-User-ID header', { correlationId, authUserId: req.authUserId });
     }
 
     next();
