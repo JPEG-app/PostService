@@ -12,6 +12,22 @@ export interface PostCreatedEventData extends Post {
   eventTimestamp: string;
 }
 
+export interface PostLikedEventData {
+  eventType: 'PostLiked';
+  eventTimestamp: string;
+  postId: string;
+  userId: string;
+}
+
+export interface PostUnlikedEventData {
+  eventType: 'PostUnliked';
+  eventTimestamp: string;
+  postId: string;
+  userId: string;
+}
+
+type PostLifecycleEvent = PostCreatedEventData | PostLikedEventData | PostUnlikedEventData;
+
 export class PostService {
   private postRepository: PostRepository;
   private cachedUserRepository: CachedUserRepository;
@@ -27,11 +43,15 @@ export class PostService {
     this.logger = loggerInstance;
   }
 
-  private async sendPostEvent(eventData: PostCreatedEventData, correlationId?: string): Promise<void> {
-    this.logger.info(`PostService: Attempting to send ${eventData.eventType} event`, { correlationId, postId: eventData.postId, topic: POST_EVENTS_TOPIC, type: 'KafkaProducerLog.AttemptSend' });
+  private async sendPostLifecycleEvent(eventData: PostLifecycleEvent, correlationId?: string): Promise<void> {
+    const eventType = eventData.eventType;
+    const postId = 'postId' in eventData ? eventData.postId : 'N/A';
+    
+    this.logger.info(`PostService: Attempting to send ${eventType} event`, { correlationId, postId, topic: POST_EVENTS_TOPIC, type: 'KafkaProducerLog.AttemptSend' });
     try {
       const producer = await getKafkaProducer(this.logger, correlationId); 
       const messages: Message[] = [{
+        key: postId,
         value: JSON.stringify(eventData),
         headers: correlationId ? { 'X-Correlation-ID': correlationId } : undefined,
       }];
@@ -40,9 +60,9 @@ export class PostService {
         messages: messages,
       };
       await producer.send(record);
-      this.logger.info(`PostService: Sent ${eventData.eventType} event successfully`, { correlationId, postId: eventData.postId, topic: POST_EVENTS_TOPIC, type: 'KafkaProducerLog.SentSuccess' });
+      this.logger.info(`PostService: Sent ${eventType} event successfully`, { correlationId, postId, topic: POST_EVENTS_TOPIC, type: 'KafkaProducerLog.SentSuccess' });
     } catch (error: any) {
-      this.logger.error(`PostService: Failed to send post event to Kafka`, { correlationId, postId: eventData.postId, topic: POST_EVENTS_TOPIC, error: error.message, stack: error.stack, type: 'KafkaProducerLog.SendError' });
+      this.logger.error(`PostService: Failed to send post event to Kafka`, { correlationId, postId, topic: POST_EVENTS_TOPIC, error: error.message, stack: error.stack, type: 'KafkaProducerLog.SendError' });
     }
   }
 
@@ -70,7 +90,7 @@ export class PostService {
         eventType: 'PostCreated',
         eventTimestamp: new Date().toISOString(),
       };
-      await this.sendPostEvent(eventPayload, correlationId);
+      await this.sendPostLifecycleEvent(eventPayload, correlationId);
     } else {
         this.logger.error("PostService: Post created but ID is missing, cannot send PostCreated Kafka event.", { correlationId, postData: createdPost, type: 'ServiceError.createPostMissingIdForEvent' });
     }
@@ -161,6 +181,15 @@ export class PostService {
     try {
         const newLike = await this.postRepository.createLike(userId, postId, correlationId);
         this.logger.info('PostService: likePost successful', { correlationId, postId, userId, likeId: newLike.likeId, type: 'ServiceLog.likePostSuccess' });
+        
+        const eventPayload: PostLikedEventData = {
+          eventType: 'PostLiked',
+          eventTimestamp: new Date().toISOString(),
+          postId: postId,
+          userId: userId,
+        };
+        await this.sendPostLifecycleEvent(eventPayload, correlationId);
+
         return newLike;
     } catch (error: any) {
         if (error.message === 'Like already exists') {
@@ -188,6 +217,14 @@ export class PostService {
     const success = await this.postRepository.deleteLike(userId, postId, correlationId);
     if (success) {
         this.logger.info('PostService: unlikePost successful', { correlationId, postId, userId, type: 'ServiceLog.unlikePostSuccess' });
+        
+        const eventPayload: PostUnlikedEventData = {
+          eventType: 'PostUnliked',
+          eventTimestamp: new Date().toISOString(),
+          postId: postId,
+          userId: userId,
+        };
+        await this.sendPostLifecycleEvent(eventPayload, correlationId);
     } else {
         this.logger.info('PostService: unlikePost - Like not found or already unliked', { correlationId, postId, userId, type: 'ServiceLog.unlikePostNotFoundOrAlreadyUnliked' });
     }
